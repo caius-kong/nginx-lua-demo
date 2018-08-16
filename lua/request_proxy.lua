@@ -99,8 +99,7 @@ else
             return
         end
     else
-        --跳转正式环境的登录页面
-        ngx.var.cur_proxy_pass = "10.45.80.26/portal"
+        --跳转正式环境
         return
     end
 end
