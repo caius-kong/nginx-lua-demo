@@ -54,6 +54,19 @@ local function not_in_array(b,list)
     return true
 end
 
+--判断是否属于灰度
+local function isGray(targetRuleValue, strategyForwardReverse, ruleValue)
+    if(strategyForwardReverse=="0" and in_array(targetRuleValue, split(ruleValue, ","))) then
+--        ngx.say("该targetRuleValue:" .. targetRuleValue .. ", 属于正向灰度规则")
+        return true
+    elseif(strategyForwardReverse=="1" and not_in_array(targetRuleValue, split(ruleValue, ","))) then
+--        ngx.say("该targetRuleValue：" .. targetRuleValue .. ", 属于反向灰度规则")
+        return true
+    end
+--    ngx.say("该targetRuleValue：" .. targetRuleValue .. ", 不属于灰度规则")
+    return false
+end
+
 local shared_data = ngx.shared.shared_data
 
 --新生成的两个stream的名字（具体的upstream生成在gateway模块处理：监听k8s事件，更新nginx.conf）
@@ -68,43 +81,52 @@ if gray_flag == "1" then
     ngx.var.cur_proxy_pass = grayUpstream
     return
 else
-    --如果不存在灰度标识，再判断cookie中是否存在用户信息userId
+    --如果不存在灰度标识，再判断cookie中是否存在bss3_sysUserId > bss3_orgId > bss3_lanId；userId
+    local cloud_app_id = ngx.var.cookie_cloud_app_id;
+    local bss3_sysUserId = ngx.var.cookie_bss3_sysUserId;
+    local bss3_orgId = ngx.var.cookie_bss3_orgId;
+    local bss3_lanId = ngx.var.cookie_bss3_lanId;
     local userId = ngx.var.cookie_userId;
-    if userId ~= nil then
---        ngx.say("cookie_userId:", userId);
-        --从共享内存中获取规则缓存，(WEB, userId)去匹配规则
-        for i,v in ipairs(shared_data:get_keys(1024)) do
-            local grayRule = shared_data:get(v);
---            ngx.say(grayRule)
-            local ruleArray = split(grayRule, "_");
-            local ruleValue = ruleArray[2]
-            local strategyForwardReverse = ruleArray[3]
-            local bootstrapName = ruleArray[4]
-            if(bootstrapName == "WEB") then
-                if(strategyForwardReverse=="0" and in_array(userId, split(ruleValue, ","))) then
---                    ngx.say("该userId:" .. userId .. ", 属于正向灰度规则")
-                    gray_flag = "1"
-                    break
-                elseif(strategyForwardReverse=="1" and not_in_array(userId, split(ruleValue, ","))) then
---                    ngx.say("该userId：" .. userId .. ", 属于反向灰度规则")
-                    gray_flag = "1"
-                    break
-                end
+--    ngx.say("cookie_cloud_app_id:", cloud_app_id);
+    if (cloud_app_id == nil) or (bss3_sysUserId == nil and bss3_orgId == nil and bss3_lanId == nil and userId == nil) then
+--        ngx.say("cookie中数据不全，直接跳转正式环境")
+        return
+    end
+    --从共享内存中获取规则库，去匹配规则
+    for i,v in ipairs(shared_data:get_keys(1024)) do
+        local grayRule = shared_data:get(v);
+--        ngx.say(grayRule)
+        local ruleArray = split(grayRule, "_");
+        local ruleValue = ruleArray[2]
+        local strategyForwardReverse = ruleArray[3]
+        local ruleIterm = ruleArray[4]
+        local appId = ruleArray[5]
+        local bootstrapName = ruleArray[6]
+        --WEB入口下的规则，且以BSS优先，userId是zcm的
+        if(bootstrapName == "WEB" and cloud_app_id == appId) then
+            if (ruleIterm == "User Id" and bss3_sysUserId ~=nil and isGray(bss3_sysUserId, strategyForwardReverse, ruleValue)) then
+                gray_flag = "1"
+                break
+            elseif (ruleIterm == "User Group" and bss3_orgId ~=nil and isGray(bss3_orgId, strategyForwardReverse, ruleValue)) then
+                gray_flag = "1"
+                break
+            elseif (ruleIterm == "Local Network" and bss3_lanId ~=nil and isGray(bss3_lanId, strategyForwardReverse, ruleValue)) then
+                gray_flag = "1"
+                break
+            elseif (ruleIterm == "User Id" and userId ~= nil and isGray(userId, strategyForwardReverse, ruleValue)) then
+                gray_flag = "1"
+                break
             end
         end
-        if gray_flag == "1" then
---            ngx.say("符合灰度规则，转发到灰度ip");
-            ngx.header.gray = "1"
-            ngx.var.cur_proxy_pass = grayUpstream
-            return
-        end
-    else
-        --跳转正式环境
+    end
+    if gray_flag == "1" then
+--        ngx.say("符合灰度规则，转发到灰度ip: ", grayUpstream);
+        ngx.req.set_header("gray", "1");
+        ngx.var.cur_proxy_pass = grayUpstream
         return
     end
 end
 
 --其他情况一律转发到生产ip
-ngx.header.gray = "0"
+ngx.req.set_header("gray", "0");
 ngx.var.cur_proxy_pass = deployUpstream
-

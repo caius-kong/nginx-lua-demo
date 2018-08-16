@@ -40,19 +40,19 @@ local function sendHttpPost ()
 	local arr, pos, err = dkjson.decode(grayRuleListOnGrayingJson, 1, nil)
 
 	for k, v in pairs(arr) do
-		local ruleId
-		local rule
+		local ruleKey
+		local ruleValue
 		for k1, v1 in pairs(v) do
 			if k1 == "ruleId" then
-				ruleId = v1
-				rule = v1
+				ruleKey = v1
+				ruleValue = v1
 			else
-				rule = rule .. "_" .. v1
+				ruleValue = ruleValue .. "_" .. v1
 			end
-	--		ngx.say(k1 .. " - " .. v1)
+--			ngx.say(k1 .. ":" .. v1)
 		end
-		ngx.say(ruleId)
-		ngx.say(rule)
+		ngx.say(ruleKey)
+		ngx.say(ruleValue)
 	end
 end
 
